@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Harmony of Herbs — Live TCM Search (No Local Items)</title>
+  <meta name="description" content="Search Traditional Chinese Medicine herbs by name (no embedded local dataset). Parallel API search, caching, advanced parsing, retries, favorites, and export." />
+  <link href="https://fonts.googleapis.com/css2?family=Merriweather:wght@300;400;700&family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+  <style>
+    :root{--bg:#f6fbf6;--accent:#2f6b3a;--muted:#6e7b64;--card:#ffffff;--shadow:rgba(17,24,17,0.06);--radius:14px;--text:#223}
+    body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial;background:linear-gradient(180deg,var(--bg),#eef7ef);color:var(--text);padding:20px}
+    .wrap{max-width:1100px;margin:0 auto}
+    header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+    h1{font-family:Merriweather,serif;color:var(--accent);margin:0}
+    .searchbar{margin:18px 0;display:flex;gap:8px;align-items:center}
+    input[type=text]{flex:1;padding:12px;border-radius:10px;border:1px solid #ddd;font-size:16px}
+    select,input[type=number]{padding:8px;border-radius:8px;border:1px solid #eee}
+    .btn{background:var(--accent);color:white;border:0;padding:10px 14px;border-radius:10px;cursor:pointer}
+    .panel{background:var(--card);border-radius:12px;padding:14px;box-shadow:0 10px 30px rgba(10,20,10,0.06)}
+    .meta{font-size:13px;color:var(--muted)}
+    .results{display:grid;grid-template-columns:1fr 360px;gap:18px;margin-top:14px}
+    .result-list{display:grid;gap:10px}
+    .result{padding:12px;border-radius:10px;border:1px solid #f0f3f0;background:linear-gradient(180deg,#fff,#fbfff8);cursor:pointer}
+    .result h3{margin:0}
+    .loader{display:inline-block;width:18px;height:18px;border-radius:50%;border:3px solid rgba(0,0,0,0.08);border-top-color:var(--accent);animation:spin 1s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .small{font-size:13px;color:var(--muted)}
+    .tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+    .tag{background:#eef6ea;padding:6px 8px;border-radius:8px;font-size:12px}
+    pre{background:#0b0b0b;color:#f6f6f6;padding:8px;border-radius:8px;overflow:auto}
+    .right-pane{position:relative}
+    .favorites{margin-top:10px}
+    .fav-item{display:flex;justify-content:space-between;padding:8px 10px;border-radius:8px;border:1px dashed #e6efe6}
+    footer{margin-top:18px;color:var(--muted);font-size:13px}
+    .controls-row{display:flex;gap:8px;align-items:center}
+    .adv{font-size:13px;color:var(--muted);margin-top:6px}
+    .raw-toggle{margin-left:6px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Harmony of Herbs — Live Search</h1>
+      <div class="meta">No local items: search by name (English/Chinese/Pinyin/Latin)</div>
+    </header>
+
+    <div class="panel">
+      <div class="searchbar">
+        <input id="q" type="text" placeholder="Type herb name (e.g. 金银花, Jin Yin Hua, Lonicera japonica)" aria-label="Search herb" />
+        <select id="api-provider" title="API provider">
+          <option value="tianapi">TianAPI (示例)</option>
+          <option value="wikipedia">Wikipedia fallback</option>
+        </select>
+        <input id="api-key" type="text" placeholder="API key (if required)" style="width:260px" />
+        <button id="search-btn" class="btn">Search</button>
+      </div>
+      <div class="adv">Advanced: supports punctuation normalization, diacritics removal, pinyin/no-tone matching, auto-retries, caching and parallel requests. Use the "Custom API" feature below to add your own endpoint template.</div>
+
+      <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <label class="small">Debounce(ms): <input id="deb" type="number" value="350" style="width:80px" /></label>
+        <label class="small">Timeout(ms): <input id="timeout" type="number" value="7000" style="width:100px" /></label>
+        <label class="small">Max retries: <input id="retries" type="number" value="2" style="width:80px" /></label>
+        <button id="clear-cache" class="btn" style="background:#4b8b5a">Clear Cache</button>
+        <button id="export-json" class="btn" style="background:#6b8b99">Export Last Result</button>
+      </div>
+
+      <div class="controls-row" style="margin-top:12px">
+        <input id="custom-template" type="text" placeholder="Custom API template — use {key} and {q} placeholders e.g. https://example.com/api?key={key}&q={q}" style="flex:1" />
+        <button id="save-template" class="btn" style="background:#7a5a9c">Save Template</button>
+      </div>
+
+    </div>
+
+    <div class="results">
+      <div>
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <h2 style="margin:12px 0 8px">Search Results</h2>
+          <div id="status" class="small muted">Idle</div>
+        </div>
+        <div id="result-list" class="result-list"></div>
+      </div>
+
+      <aside class="right-pane">
+        <div class="panel">
+          <h3 style="margin:0 0 8px">Details</h3>
+          <div id="detail-area" class="small muted">Search a herb to see details here.</div>
+          <div style="margin-top:10px;display:flex;gap:8px">
+            <button id="fav-toggle" class="btn">Save to Favorites</button>
+            <button id="open-source" class="btn" style="background:#6b6b6b">Open Source</button>
+            <label class="small raw-toggle"><input id="show-raw" type="checkbox" /> Show raw API</label>
+          </div>
+        </div>
+
+        <div class="panel favorites">
+          <h4 style="margin:0 0 8px">Favorites</h4>
+          <div id="favorites-list" class="small"></div>
+        </div>
+      </aside>
+    </div>
+
+    <footer>
+      <div>Notes: Browser calls to third-party APIs may be blocked by CORS. If you see CORS errors, run a simple proxy (Node/Express) that forwards requests and sets CORS headers. The UI supports saving a custom API template for your server.</div>
+    </footer>
+  </div>
+
+  <script>
+    /*****************************************************************
+     * Advanced live-search single-file app
+     * - No embedded local herb dataset
+     * - Queries external API(s) in parallel with retries & timeout
+     * - Caches results (IndexedDB); suggestions come from history
+     * - Parsing: normalize punctuation, remove diacritics, support pinyin
+     * - Merge & rank results, show detail view with paozhi/season/constituents
+     * - Export last result as JSON; save favorites
+     *****************************************************************/
+
+    // ===== utils =====
+    function normalizeInput(s){ if(!s) return ''; // trim, to halfwidth, remove control chars
+      s = s.trim(); // convert fullwidth to halfwidth
+      s = s.replace(/[！-～]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
+      // remove weird punctuation
+      s = s.replace(/[\u2000-\u206F\u2E00-\u2E7F"'\(\)\[\]{}<>:;\\/|]/g,' ');
+      s = s.replace(/\s+/g,' ').toLowerCase();
+      return removeDiacritics(s);
+    }
+
+    // remove diacritics (for latin/pinyin) — keeps basic letters
+    function removeDiacritics(str){ return str.normalize('NFD').replace(/\p{Diacritic}/gu, ''); }
+
+    // simple timeout wrapper
+    function fetchWithTimeout(url, opts={timeout:7000}){
+      const controller = new AbortController(); const id = setTimeout(()=>controller.abort(), opts.timeout);
+      return fetch(url, {...opts, signal: controller.signal}).finally(()=>clearTimeout(id));
+    }
+
+    // small IndexedDB wrapper for caching
+    const DB = (function(){
+      const dbName='herbSearchDB', store='responses'; let _db=null;
+      function open(){ return new Promise((res,rej)=>{ if(_db) return res(_db); const r = indexedDB.open(dbName,1); r.onupgradeneeded = ()=>{ r.result.createObjectStore(store,{keyPath:'k'}); }; r.onsuccess = ()=>{ _db = r.result; res(_db); }; r.onerror = ()=>rej(r.error); }); }
+      async function get(k){ const db = await open(); return new Promise((res,rej)=>{ const tx=db.transaction(store,'readonly'); const st=tx.objectStore(store); const rq = st.get(k); rq.onsuccess=()=>res(rq.result ? rq.result.v : null); rq.onerror=()=>rej(rq.error); }); }
+      async function put(k,v){ const db=await open(); return new Promise((res,rej)=>{ const tx=db.transaction(store,'readwrite'); const st=tx.objectStore(store); const rq=st.put({k,v}); rq.onsuccess=()=>res(true); rq.onerror=()=>rej(rq.error); }); }
+      async function del(k){ const db=await open(); return new Promise((res,rej)=>{ const tx=db.transaction(store,'readwrite'); const st=tx.objectStore(store); const rq=st.delete(k); rq.onsuccess=()=>res(true); rq.onerror=()=>rej(rq.error); }); }
+      async function clear(){ const db=await open(); return new Promise((res,rej)=>{ const tx=db.transaction(store,'readwrite'); const st=tx.objectStore(store); const rq=st.clear(); rq.onsuccess=()=>res(true); rq.onerror=()=>rej(rq.error); }); }
+      return {get,put,del,clear};
+    })();
+
+    // ===== UI refs =====
+    const qEl = document.getElementById('q'); const searchBtn = document.getElementById('search-btn'); const resultListEl = document.getElementById('result-list');
+    const statusEl = document.getElementById('status'); const detailEl = document.getElementById('detail-area'); const favToggle = document.getElementById('fav-toggle');
+    const favListEl = document.getElementById('favorites-list'); const apiProviderEl = document.getElementById('api-provider'); const apiKeyEl = document.getElementById('api-key');
+    const debEl = document.getElementById('deb'); const timeoutEl = document.getElementById('timeout'); const retriesEl = document.getElementById('retries');
+    const clearCacheBtn = document.getElementById('clear-cache'); const exportJsonBtn = document.getElementById('export-json'); const customTemplateEl = document.getElementById('custom-template');
+    const saveTemplateBtn = document.getElementById('save-template'); const showRawEl = document.getElementById('show-raw'); const openSourceBtn = document.getElementById('open-source');
+
+    // state
+    let lastResult = null; let favorites = JSON.parse(localStorage.getItem('favorites')||'[]'); let searchHistory = JSON.parse(localStorage.getItem('searchHistory')||'[]');
+
+    // render favorites
+    function renderFavorites(){ favListEl.innerHTML = ''; if(!favorites.length) return favListEl.innerHTML = '<div class="small muted">No favorites yet.</div>';
+      favorites.forEach(f=>{ const el=document.createElement('div'); el.className='fav-item'; el.innerHTML=`<div>${f.name}</div><div><button class='btn' data-name='${f.name}'>Remove</button></div>`; favListEl.appendChild(el); el.querySelector('button').addEventListener('click', ()=>{ favorites=favorites.filter(x=>x.name!==f.name); localStorage.setItem('favorites', JSON.stringify(favorites)); renderFavorites(); }); }); }
+    renderFavorites();
+
+    // helpers to persist history
+    function pushHistory(term){ if(!term) return; searchHistory = Array.from(new Set([term,...searchHistory])).slice(0,60); localStorage.setItem('searchHistory', JSON.stringify(searchHistory)); }
+
+    // debounce
+    function debounce(fn,ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
+
+    // ===== API integration layer =====
+    // Provider adapters: each returns a normalized array of results with keys: name, latin, pinyin, description, paozhi, harvestSeason, constituents, source, raw
+
+    async function providerTianAPI(q, key, opts){
+      // endpoint sample: https://apis.tianapi.com/zhongyao/index?key=KEY&word=金银花
+      if(!key) throw new Error('TianAPI requires API key');
+      const url = `https://apis.tianapi.com/zhongyao/index?key=${encodeURIComponent(key)}&word=${encodeURIComponent(q)}`;
+      const res = await fetchWithTimeout(url, {timeout: opts.timeout});
+      const data = await res.json();
+      // TianAPI returns newslist array — mapping is heuristic and defensive
+      const list = (data.newslist||[]).map(item=>({
+        name: item.name || item.title || item.zhname || q,
+        latin: item.latin || item.latin_name || '',
+        pinyin: item.pinyin || '',
+        description: item.desc || item.function || item.summary || '',
+        paozhi: item.paozhi || item.processing || '',
+        harvestSeason: item.harvest || item.harvest_season || '',
+        constituents: (item.constituents || item.chemistry || item.ingredient || '').toString().split(/[;,，、]/).map(s=>s.trim()).filter(Boolean),
+        source: 'TianAPI', raw: item
+      }));
+      return list;
+    }
+
+    async function providerWikipedia(q, key, opts){
+      // try zh or en wikipedia by detecting Chinese chars
+      const isChinese = /[\u4e00-\u9fff]/.test(q);
+      const lang = isChinese ? 'zh' : 'en';
+      const api = `https://${lang}.wikipedia.org/w/api.php?action=query&prop=extracts|info&exintro=1&format=json&origin=*&titles=${encodeURIComponent(q)}`;
+      const res = await fetchWithTimeout(api, {timeout: opts.timeout});
+      const data = await res.json();
+      const pages = data.query && data.query.pages ? Object.values(data.query.pages) : [];
+      if(!pages.length) return [];
+      return pages.map(p=>({ name: p.title || q, latin:'', pinyin:'', description: (p.extract || '').replace(/<[^>]+>/g,''), paozhi:'', harvestSeason:'', constituents:[], source: 'Wikipedia', raw: p }));
+    }
+
+    // if user provided custom template, replace {key} and {q}
+    function providerCustom(q, key, opts){ const t = localStorage.getItem('customTemplate') || customTemplateEl.value.trim(); if(!t) return Promise.resolve([]); const url = t.replace('{key}', encodeURIComponent(key||'')).replace('{q}', encodeURIComponent(q)); return fetchWithTimeout(url, {timeout:opts.timeout}).then(r=>r.json()).then(d=>{ // try to heuristically map
+        if(Array.isArray(d)) return d.map(item=>({name:item.name||item.title||q, latin:item.latin||'', pinyin:item.pinyin||'', description:item.desc||item.summary||'', paozhi:item.paozhi||'', harvestSeason:item.harvestSeason||'', constituents:item.constituents||[], source:'Custom', raw:item}));
+        // if it has data.newslist
+        if(d.newslist) return d.newslist.map(item=>({name:item.name||q, latin:item.latin||'', pinyin:item.pinyin||'', description:item.desc||item.function||'', paozhi:item.paozhi||'', harvestSeason:item.harvest||'', constituents:(item.constituents||'').toString().split(/[;,，、]/).map(s=>s.trim()).filter(Boolean), source:'Custom', raw:item}));
+        return [{name:q, description:JSON.stringify(d).slice(0,800), source:'Custom', raw:d}];
+      }); }
+
+    // Runner: parallel queries with retries and timeout
+    async function runProviders(query, providers, opts){
+      const normalized = normalizeInput(query);
+      const cacheKey = `r:${providers.join('|')}:${normalized}`;
+      const cached = await DB.get(cacheKey);
+      if(cached) return {fromCache:true, data:cached};
+
+      const attempts = [];
+      // provider factories
+      for(const p of providers){
+        const fn = async ()=>{
+          for(let attempt=0; attempt<=opts.retries; attempt++){
+            try{
+              if(p==='tianapi') return await providerTianAPI(query, opts.apiKey, opts);
+              if(p==='wikipedia') return await providerWikipedia(query, opts.apiKey, opts);
+              if(p==='custom') return await providerCustom(query, opts.apiKey, opts);
+              return [];
+            }catch(err){ if(attempt<opts.retries){ await new Promise(r=>setTimeout(r, 300*(attempt+1))); continue; } throw err; }
+          }
+        };
+        attempts.push(fn());
+      }
+
+      const settled = await Promise.allSettled(attempts);
+      const results = [];
+      const errors = [];
+      settled.forEach((s,i)=>{ if(s.status==='fulfilled'){ if(Array.isArray(s.value)) results.push(...s.value); else if(s.value) results.push(s.value); } else { errors.push({provider:providers[i], error:s.reason && s.reason.message}); } });
+
+      // basic ranking: prefer results with paozhi/constituents/description
+      results.sort((a,b)=>{ const score = r=> (r.description?2:0) + (r.paozhi?2:0) + (r.constituents && r.constituents.length?2:0); return score(b)-score(a); });
+
+      await DB.put(cacheKey, {ts:Date.now(), results, errors});
+      return {fromCache:false,data:{results,errors}};
+    }
+
+    // ===== UI glue =====
+    let debounceMs = Number(debEl.value) || 350; debEl.addEventListener('change', ()=> debounceMs = Number(debEl.value));
+    const doSearchDebounced = debounce(()=> doSearch(), debounceMs);
+    qEl.addEventListener('input', ()=> doSearchDebounced());
+
+    searchBtn.addEventListener('click', ()=> doSearch());
+
+    async function doSearch(){
+      const term = qEl.value.trim(); if(!term){ statusEl.textContent='Enter a herb name.'; return; }
+      statusEl.innerHTML = '<span class="loader"></span> Searching...';
+      const apiProv = apiProviderEl.value; const apiKey = apiKeyEl.value.trim(); const timeout = Number(timeoutEl.value)||7000; const retries = Number(retriesEl.value)||2;
+      const providers = [];
+      // Order: custom (if saved), selected provider, wikipedia as fallback
+      const hasCustom = (localStorage.getItem('customTemplate')||customTemplateEl.value).trim(); if(hasCustom) providers.push('custom');
+      if(apiProv==='tianapi') providers.push('tianapi'); else if(apiProv==='wikipedia') providers.push('wikipedia');
+      if(!providers.includes('wikipedia')) providers.push('wikipedia');
+
+      try{
+        const res = await runProviders(term, providers, {apiKey,timeout,retries});
+        const data = res.data; const list = data.results || [];
+        lastResult = {query:term, providers, timestamp:Date.now(), raw:data};
+        pushHistory(term);
+        renderResults(list);
+        statusEl.textContent = `Found ${list.length} result(s)` + (res.fromCache ? ' (cache)' : '');
+        // show first result
+        if(list.length) showDetail(list[0]);
+      }catch(err){ statusEl.textContent = 'Search failed: ' + err.message; resultListEl.innerHTML = ''; detailEl.textContent = '—'; }
+    }
+
+    function renderResults(list){ resultListEl.innerHTML = ''; if(!list.length) return resultListEl.innerHTML = '<div class="small muted">No results.</div>';
+      list.forEach((r, idx)=>{ const el=document.createElement('div'); el.className='result'; el.innerHTML = `<h3>${r.name || 'Unnamed'}</h3><div class="small muted">Source: ${r.source || 'unknown'}</div><div style="margin-top:6px" class="small">${(r.description||'').slice(0,260)}</div><div class="tags">${(r.constituents||[]).slice(0,6).map(c=>`<span class='tag'>${c}</span>`).join('')}</div>`; el.addEventListener('click', ()=> showDetail(r)); resultListEl.appendChild(el); }); }
+
+    function showDetail(r){ detailEl.innerHTML = ''; const container = document.createElement('div'); container.innerHTML = `
+      <h3 style="margin:0 0 6px">${r.name || ''}</h3>
+      <div class="small muted">Source: ${r.source||''}</div>
+      <p class="small" style="margin-top:8px">${r.description || 'No description available.'}</p>
+      <dl style="margin-top:8px">
+        <dt>Paozhi (processing)</dt><dd>${r.paozhi || '—'}</dd>
+        <dt>Harvest season</dt><dd>${r.harvestSeason || '—'}</dd>
+        <dt>Chemical constituents</dt><dd>${(r.constituents && r.constituents.length) ? r.constituents.join(', ') : '—'}</dd>
+      </dl>
+    `; detailEl.appendChild(container);
+
+      // raw toggle
+      if(showRawEl.checked){ const pre=document.createElement('pre'); pre.textContent = JSON.stringify(r.raw||r, null, 2); detailEl.appendChild(pre); }
+
+      // open-source link
+      openSourceBtn.onclick = ()=>{ if(r.raw && r.raw._url) window.open(r.raw._url,'_blank'); else if(r.source==='Wikipedia') window.open(`https://en.wikipedia.org/wiki/${encodeURIComponent(r.name)}`,'_blank'); else alert('No direct source URL available.'); };
+
+      // fav toggle
+      favToggle.onclick = ()=>{ const exists = favorites.some(f=>f.name===r.name); if(exists){ favorites = favorites.filter(f=>f.name!==r.name); localStorage.setItem('favorites', JSON.stringify(favorites)); favToggle.textContent='Save to Favorites'; renderFavorites(); } else { favorites.unshift({name:r.name,ts:Date.now()}); localStorage.setItem('favorites', JSON.stringify(favorites)); favToggle.textContent='Saved — Remove?'; renderFavorites(); } };
+
+      const exists = favorites.some(f=>f.name===r.name); favToggle.textContent = exists ? 'Saved — Remove?' : 'Save to Favorites';
+    }
+
+    // clear cache
+    clearCacheBtn.addEventListener('click', async ()=>{ await DB.clear(); alert('Cache cleared'); });
+
+    // export last result
+    exportJsonBtn.addEventListener('click', ()=>{ if(!lastResult) return alert('No result to export.'); const blob = new Blob([JSON.stringify(lastResult, null, 2)], {type:'application/json'}); const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='herb-search-result.json'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url); });
+
+    // save custom template
+    saveTemplateBtn.addEventListener('click', ()=>{ const t = customTemplateEl.value.trim(); if(!t) return alert('Enter a template with {q} placeholder.'); localStorage.setItem('customTemplate', t); alert('Template saved. It will be used before provider results.'); });
+
+    // export/import favorites? (simple)
+    // load favorites already done
+
+    // quick-search from history suggestions (simple autocomplete)
+    qEl.addEventListener('keydown', e=>{ if(e.key==='Enter'){ doSearch(); } });
+
+    // restore last custom template
+    customTemplateEl.value = localStorage.getItem('customTemplate') || '';
+
+    // expose manual search for debugging
+    window._doSearch = doSearch;
+
+    // initialize saved favorites render
+    renderFavorites();
+
+    // try to prefill API provider key from localStorage
+    apiKeyEl.value = localStorage.getItem('tian_api_key') || '';
+    apiKeyEl.addEventListener('change', ()=> localStorage.setItem('tian_api_key', apiKeyEl.value));
+
+    // show/hide raw toggle change
+    showRawEl.addEventListener('change', ()=>{ if(lastResult && lastResult.length) showDetail(lastResult[0]); });
+
+    // On load, if q has value, auto-search (but user may not want automatic) — skip
+
+  </script>
+</body>
+</html>
